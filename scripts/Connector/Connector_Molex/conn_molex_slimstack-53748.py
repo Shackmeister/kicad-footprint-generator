@@ -21,6 +21,7 @@ import os
 
 # export PYTHONPATH="${PYTHONPATH}<path to kicad-footprint-generator directory>"
 sys.path.append(os.path.join(sys.path[0], "..", "..", ".."))  # load parent path of KicadModTree
+import math
 from math import sqrt
 import argparse
 import yaml
@@ -81,6 +82,10 @@ def generate_one_footprint(pincount, configuration):
 
     tab_width = 0.6
     tab_height = 1.1
+    tab_cut_x = 0.49
+    tab_cut_y = 0.7
+    silk_tab_cut_offset_x = configuration['silk_fab_offset']*math.tan(math.radians(55/2))
+    silk_tab_cut_offset_y = configuration['silk_fab_offset']*math.tan(math.radians(35/2))
 
     fab_width = configuration['fab_line_width']
 
@@ -92,7 +97,7 @@ def generate_one_footprint(pincount, configuration):
     courtyard_width = configuration['courtyard_line_width']
     courtyard_precision = configuration['courtyard_grid']
     courtyard_clearance = configuration['courtyard_offset']['connector']
-    courtyard_x = roundToBase(max(h_body_width + tab_width, pad_x_spacing/2) + courtyard_clearance, courtyard_precision)
+    courtyard_x = roundToBase(max(h_body_width + tab_width, (pad_x_spacing + pad_width)/2) + courtyard_clearance, courtyard_precision)
     courtyard_y = roundToBase(h_body_length + courtyard_clearance, courtyard_precision)
 
     # create pads
@@ -104,7 +109,17 @@ def generate_one_footprint(pincount, configuration):
         layers=Pad.LAYERS_SMT))
 
     # create fab outline and pin 1 marker
-    kicad_mod.append(RectLine(start=[-h_body_width, -h_body_length], end=[h_body_width, h_body_length], layer='F.Fab', width=fab_width))
+    fab_outline = [[-h_body_width - tab_width, -h_body_length], \
+                        [-h_body_width - tab_width, -h_body_length + tab_height], [-h_body_width, -h_body_length + tab_height], \
+                        [-h_body_width, h_body_length - tab_height], [-h_body_width - tab_width, h_body_length - tab_height], \
+                        [-h_body_width - tab_width, h_body_length - tab_cut_y], [-h_body_width - tab_width + tab_cut_x, h_body_length], \
+                        [h_body_width + tab_width, h_body_length], [h_body_width + tab_width, h_body_length - tab_height],
+                        [h_body_width, h_body_length - tab_height], [h_body_width, -h_body_length + tab_height], \
+                        [h_body_width + tab_width, -h_body_length + tab_height], [h_body_width + tab_width, -h_body_length], \
+                        [-h_body_width - tab_width, -h_body_length]]
+    kicad_mod.append(PolygoneLine(polygone=fab_outline, layer='F.Fab', width=fab_width))
+
+
     body_edge={
         'left':-h_body_width,
         'top':-h_body_length
@@ -114,25 +129,24 @@ def generate_one_footprint(pincount, configuration):
     kicad_mod.append(Line(start=[-h_body_width+marker_x, -pad_y_span/2], end=[-h_body_width, -pad_y_span/2+marker_x/2], layer='F.Fab', width=fab_width))
     kicad_mod.append(Line(start=[-h_body_width+marker_x, -pad_y_span/2], end=[-h_body_width, -pad_y_span/2-marker_x/2], layer='F.Fab', width=fab_width))
 
+
+    
+
     # create silkscreen outline and pin 1 marker
-    top_outline = [[h_body_width+nudge, -outline_y], [h_body_width+nudge, -h_body_length-nudge], [-h_body_width-nudge, -h_body_length-nudge],\
+    top_outline = [[h_body_width+nudge, -outline_y], [h_body_width+nudge, -h_body_length+nudge+tab_height], \
+                    [h_body_width+nudge+tab_width, -h_body_length+nudge+tab_height], [h_body_width+nudge+tab_width, -h_body_length-nudge], \
+                    [-h_body_width-nudge-tab_width, -h_body_length-nudge], [-h_body_width-nudge-tab_width, -h_body_length+nudge+tab_height], \
+                    [-h_body_width-nudge-tab_width, -h_body_length+nudge+tab_height], [-h_body_width-nudge, -h_body_length+nudge+tab_height], \
                     [-h_body_width-nudge, -outline_y], [-h_body_width-marker_x, -outline_y]]
-    bottom_outline = [[h_body_width+nudge, outline_y], [h_body_width+nudge, h_body_length+nudge], [-h_body_width-nudge, h_body_length+nudge],\
-                     [-h_body_width-nudge, outline_y]]
-    top_left_tab = [[-h_body_width-nudge, -h_body_length-nudge], [-h_body_width-nudge-tab_width, -h_body_length-nudge],\
-                    [-h_body_width-nudge-tab_width,-h_body_length+nudge+tab_height], [-h_body_width-nudge,-h_body_length+nudge+tab_height]]
-    bottom_left_tab = [[-h_body_width-nudge,+h_body_length+nudge], [-h_body_width-nudge-tab_width,+h_body_length-tab_height/2],\
-                       [-h_body_width-nudge-tab_width, h_body_length-nudge-tab_height], [-h_body_width-nudge, h_body_length-nudge-tab_height]]
-    top_right_tab = [[h_body_width+nudge, -h_body_length-nudge], [h_body_width+nudge+tab_width, -h_body_length-nudge],\
-                     [h_body_width+nudge+tab_width, -h_body_length+nudge+tab_height], [h_body_width+nudge, -h_body_length+nudge+tab_height]]
-    bottom_right_tab = [[h_body_width+nudge, h_body_length+nudge], [h_body_width+nudge+tab_width, h_body_length+nudge],\
-                       [h_body_width+nudge+tab_width, h_body_length-nudge-tab_height], [h_body_width+nudge, h_body_length-nudge-tab_height]]
+
+    bottom_outline = [[h_body_width+nudge, outline_y], [h_body_width+nudge, h_body_length-nudge-tab_height], \
+                    [h_body_width+nudge+tab_width, h_body_length-nudge-tab_height], [h_body_width+nudge+tab_width, h_body_length+nudge], \
+                    [-h_body_width - tab_width + tab_cut_x - silk_tab_cut_offset_x,+h_body_length+nudge], [-h_body_width-nudge-tab_width, h_body_length - tab_cut_y + silk_tab_cut_offset_y],\
+                    [-h_body_width-nudge-tab_width, h_body_length-nudge-tab_height], [-h_body_width - nudge, h_body_length-nudge-tab_height], \
+                    [-h_body_width-nudge, outline_y]]
+    
     kicad_mod.append(PolygoneLine(polygone=top_outline, layer='F.SilkS', width=silk_width))
     kicad_mod.append(PolygoneLine(polygone=bottom_outline, layer='F.SilkS', width=silk_width))
-    kicad_mod.append(PolygoneLine(polygone=top_left_tab, layer='F.SilkS', width=silk_width))
-    kicad_mod.append(PolygoneLine(polygone=bottom_left_tab, layer='F.SilkS', width=silk_width))
-    kicad_mod.append(PolygoneLine(polygone=top_right_tab, layer='F.SilkS', width=silk_width))
-    kicad_mod.append(PolygoneLine(polygone=bottom_right_tab, layer='F.SilkS', width=silk_width))
 
     # create courtyard
     kicad_mod.append(RectLine(start=[-courtyard_x, -courtyard_y], end=[courtyard_x, courtyard_y], layer='F.CrtYd', width=courtyard_width))
