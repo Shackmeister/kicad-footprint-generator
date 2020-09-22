@@ -16,6 +16,9 @@ from ipc_pad_size_calculators import *
 from quad_dual_pad_border import add_dual_or_quad_pad_border
 from drawing_tools import nearestSilkPointOnOrthogonalLine
 
+sys.path.append(os.path.join(sys.path[0], "..", "utils"))
+from ep_handling_utils import getEpRoundRadiusParams
+
 ipc_density = 'nominal'
 ipc_doc_file = '../ipc_definitions.yaml'
 
@@ -34,8 +37,14 @@ class Gullwing():
                 self.ipc_defintions = yaml.safe_load(ipc_stream)
 
                 self.configuration['min_ep_to_pad_clearance'] = 0.2
+
+                #ToDo: find a settings file that can contain these.
+                self.configuration['paste_radius_ratio'] = 0.25
+                self.configuration['paste_maximum_radius'] = 0.25
+
                 if 'ipc_generic_rules' in self.ipc_defintions:
                     self.configuration['min_ep_to_pad_clearance'] = self.ipc_defintions['ipc_generic_rules'].get('min_ep_to_pad_clearance', 0.2)
+
             except yaml.YAMLError as exc:
                 print(exc)
 
@@ -131,10 +140,21 @@ class Gullwing():
     def generateFootprint(self, device_params, header):
         dimensions = Gullwing.deviceDimensions(device_params)
 
-        if dimensions['has_EP'] and 'thermal_vias' in device_params:
-            self.__createFootprintVariant(device_params, header, dimensions, True)
+        if 'deleted_pins' in device_params:
+            if type(device_params['deleted_pins']) is int:
+                device_params['deleted_pins'] = [device_params['deleted_pins']]
 
-        self.__createFootprintVariant(device_params, header, dimensions, False)
+        if 'hidden_pins' in device_params:
+            if type(device_params['hidden_pins']) is int:
+                device_params['hidden_pins'] = [device_params['hidden_pins']]
+
+        if 'deleted_pins' in device_params and 'hidden_pins' in device_params:
+            print("A footprint may not have deleted pins and hidden pins.")
+        else:
+            if dimensions['has_EP'] and 'thermal_vias' in device_params:
+                self.__createFootprintVariant(device_params, header, dimensions, True)
+
+            self.__createFootprintVariant(device_params, header, dimensions, False)
 
     def __createFootprintVariant(self, device_params, header, dimensions, with_thermal_vias):
         fab_line_width = self.configuration.get('fab_line_width', 0.1)
@@ -145,7 +165,17 @@ class Gullwing():
         size_x = dimensions['body_size_x'].nominal
         size_y = dimensions['body_size_y'].nominal
 
-        pincount = device_params['num_pins_x']*2 + device_params['num_pins_y']*2
+        pincount_full = device_params['num_pins_x']*2 + device_params['num_pins_y']*2
+        
+        if 'hidden_pins' in device_params:
+            pincount_text = '{}-{}'.format(pincount_full - len(device_params['hidden_pins']), pincount_full)
+            pincount = pincount_full - len(device_params['hidden_pins'])
+        elif 'deleted_pins' in device_params:
+            pincount_text = '{}-{}'.format(pincount_full, pincount_full - len(device_params['deleted_pins']))
+            pincount = pincount_full - len(device_params['deleted_pins'])
+        else:
+            pincount_text = '{}'.format(pincount_full)
+            pincount = pincount_full
 
         ipc_reference = 'ipc_spec_gw_large_pitch' if device_params['pitch'] >= 0.625 else 'ipc_spec_gw_small_pitch'
         if device_params.get('force_small_pitch_ipc_definition', False):
@@ -157,12 +187,12 @@ class Gullwing():
 
         pitch = device_params['pitch']
 
-        name_format = self.configuration['fp_name_format_string_no_trailing_zero']
+        name_format = self.configuration['fp_name_format_string_no_trailing_zero_pincount_text']
         EP_size = {'x':0, 'y':0}
         EP_mask_size = {'x':0, 'y':0}
 
         if dimensions['has_EP']:
-            name_format = self.configuration['fp_name_EP_format_string_no_trailing_zero']
+            name_format = self.configuration['fp_name_EP_format_string_no_trailing_zero_pincount_text']
             if 'EP_size_x_overwrite' in device_params:
                 EP_size = {
                     'x':device_params['EP_size_x_overwrite'],
@@ -174,7 +204,7 @@ class Gullwing():
                     'y':dimensions['EP_size_y'].nominal
                     }
             if 'EP_mask_x' in dimensions:
-                name_format = self.configuration['fp_name_EP_custom_mask_format_string_no_trailing_zero']
+                name_format = self.configuration['fp_name_EP_custom_mask_format_string_no_trailing_zero_pincount_text']
                 EP_mask_size = {'x':dimensions['EP_mask_x'].nominal, 'y':dimensions['EP_mask_y'].nominal}
         EP_size = Vector2D(EP_size)
 
@@ -192,7 +222,7 @@ class Gullwing():
             man=device_params.get('manufacturer',''),
             mpn=device_params.get('part_number',''),
             pkg=header['device_type'],
-            pincount=pincount,
+            pincount=pincount_text,
             size_y=size_y,
             size_x=size_x,
             pitch=device_params['pitch'],
@@ -209,7 +239,7 @@ class Gullwing():
             man=device_params.get('manufacturer',''),
             mpn=device_params.get('part_number',''),
             pkg=header['device_type'],
-            pincount=pincount,
+            pincount=pincount_text,
             size_y=size_y,
             size_x=size_x,
             pitch=device_params['pitch'],
@@ -231,7 +261,7 @@ class Gullwing():
 
         kicad_mod = Footprint(fp_name)
 
-                # init kicad footprint
+        # init kicad footprint
         kicad_mod.setDescription(
             "{manufacturer} {mpn} {package}, {pincount} Pin ({datasheet}), generated with kicad-footprint-generator {scriptname}"\
             .format(
@@ -251,14 +281,14 @@ class Gullwing():
             ).lstrip())
         kicad_mod.setAttribute('smd')
 
-        pad_shape_details = {}
-        pad_shape_details['shape'] = Pad.SHAPE_ROUNDRECT
-        pad_shape_details['radius_ratio'] = configuration.get('round_rect_radius_ratio', 0)
-        if 'round_rect_max_radius' in configuration:
-            pad_shape_details['maximum_radius'] = configuration['round_rect_max_radius']
+        if 'custom_pad_layout' in device_params:
+            pad_radius = add_custom_pad_layout(kicad_mod, configuration, pad_details, device_params)
+        else:
+            pad_radius = add_dual_or_quad_pad_border(kicad_mod, configuration, pad_details, device_params)
 
         EP_round_radius = 0
         if dimensions['has_EP']:
+            pad_shape_details = getEpRoundRadiusParams(device_params, self.configuration, pad_radius)
             EP_mask_size = EP_mask_size if EP_mask_size['x'] > 0 else None
 
             if with_thermal_vias:
@@ -291,8 +321,6 @@ class Gullwing():
 
             kicad_mod.append(EP)
             EP_round_radius = EP.getRoundRadius()
-
-        pad_radius = add_dual_or_quad_pad_border(kicad_mod, configuration, pad_details, device_params)
 
         body_edge = {
             'left': -dimensions['body_size_x'].nominal/2,
@@ -567,15 +595,15 @@ class Gullwing():
         file_handler.writeFile(filename)
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description='use confing .yaml files to create footprints.')
+    parser = argparse.ArgumentParser(description='use confing .yaml files to create footprints. See readme.md for details about the parameter file format.')
     parser.add_argument('files', metavar='file', type=str, nargs='+',
                         help='list of files holding information about what devices should be created.')
     parser.add_argument('--global_config', type=str, nargs='?', help='the config file defining how the footprint will look like. (KLC)', default='../../tools/global_config_files/config_KLCv3.0.yaml')
     parser.add_argument('--series_config', type=str, nargs='?', help='the config file defining series parameters.', default='../package_config_KLCv3.yaml')
-    parser.add_argument('--density', type=str, nargs='?', help='Density level (L,N,M)', default='N')
+    parser.add_argument('--density', type=str, nargs='?', help='IPC density level (L,N,M)', default='N')
     parser.add_argument('--ipc_doc', type=str, nargs='?', help='IPC definition document', default='../ipc_definitions.yaml')
     parser.add_argument('--force_rectangle_pads', action='store_true', help='Force the generation of rectangle pads instead of rounded rectangle')
-    parser.add_argument('--kicad4_compatible', action='store_true', help='Create footprints kicad 4 compatible')
+    parser.add_argument('--kicad4_compatible', action='store_true', help='Create footprints compatible with version 4 (avoids round-rect and custom pads).')
     args = parser.parse_args()
 
     if args.density == 'L':

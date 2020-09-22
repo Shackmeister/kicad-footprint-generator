@@ -16,6 +16,7 @@
 # (C) 2017 by @SchrodingersGat
 # (C) 2017 by Thomas Pointhuber, <thomas.pointhuber@gmx.at>
 
+from types import GeneratorType
 from KicadModTree.nodes.base.Pad import *
 from KicadModTree.nodes.specialized.ChamferedPad import *
 from KicadModTree.nodes.Node import Node
@@ -77,8 +78,11 @@ class PadArray(Node):
           shape for marking pad 1 for through hole components. (deafult: ``Pad.SHAPE_ROUNDRECT``)
         * *tht_pad1_id* (``int, string``) --
           pad number used for "pin 1" (default: 1)
-        * *exclude_pin_list* (``int, Vector1D``) --
-          which pin number should be skipped"
+        * *hidden_pins* (``int, Vector1D``) --
+          pin number(s) to be skipped; a footprint with hidden pins has missing pads and matching pin numbers
+        * *deleted_pins* (``int, Vector1D``) --
+          pin locations(s) to be skipped; a footprint with deleted pins has pads missing but no missing pin numbers"
+
 
     :Example:
 
@@ -104,9 +108,15 @@ class PadArray(Node):
         if type(self.pincount) is not int or self.pincount <= 0:
             raise ValueError('{pc} is an invalid value for pincount'.format(pc=self.pincount))
 
+        if kwargs.get('hidden_pins') and kwargs.get('deleted_pins'):
+            raise KeyError('hidden pins and deleted pins cannot be used together')
+
         self.exclude_pin_list = []
-        if kwargs.get('exclude_pin_list'):
-            self.exclude_pin_list = kwargs.get('exclude_pin_list')
+        if kwargs.get('hidden_pins'):
+            # exclude_pin_list is for pads being removed based on pad number
+            # deleted pins are filtered out later by pad location (not number)
+            self.exclude_pin_list = kwargs.get('hidden_pins')
+
             if type(self.exclude_pin_list) not in [list, tuple]:
                 raise TypeError('exclude pin list must be specified like "exclude_pin_list=[0,1]"')
             elif any([type(i) not in [int] for i in self.exclude_pin_list]):
@@ -208,8 +218,10 @@ class PadArray(Node):
             pad_numbers = [self.initialPin]
             for idx in range(1, self.pincount):
                 pad_numbers.append(self.increment(pad_numbers[-1]))
+        elif type(self.increment) == GeneratorType:
+            pad_numbers = [next(self.increment) for i in range(self.pincount)]
         else:
-            raise TypeError("Wrong type for increment. It must be either a int or callable.")
+            raise TypeError("Wrong type for increment. It must be either a int, callable or generator.")
 
         end_pad_params = copy(kwargs)
         if kwargs.get('end_pads_size_reduction'):
@@ -231,10 +243,18 @@ class PadArray(Node):
             delta_pos = Vector2D(0, 0)
 
         for i, number in enumerate(pad_numbers):
-            includePad = (i + self.initialPin) not in self.exclude_pin_list
-            for exi in self.exclude_pin_list:
-                if (i + self.initialPin) == exi:
-                    includePad = False
+            includePad = True
+
+            # deleted pins are filtered by pad/pin position (they are 'None' in pad_numbers list)
+            if type(number) not in [int, str]:
+                includePad = False
+
+            # hidden pins are filtered out by pad number (index of pad_numbers list)
+            if not kwargs.get('deleted_pins'):
+                if type(self.initialPin) == 'int':
+                    includePad = (self.initialPin + i) not in self.exclude_pin_list
+                else:
+                    includePad = number not in self.exclude_pin_list
 
             if includePad:
                 current_pad_pos = Vector2D(
